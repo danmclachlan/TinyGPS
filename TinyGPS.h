@@ -6,6 +6,23 @@ Precision improvements suggested by Wayne Holder.
 Copyright (C) 2008-2013 Mikal Hart
 All rights reserved.
 
+10/20/2023  Modifed by Dan McLachlan (drmclach@live.com)
+      Applied Kevin Walton's PUBX updates to v13 and improved support for 
+      PUBX,00 and PUBX,04 messages.
+      Also pulled in changes from the Teensy distribution adding
+      GPGSA, GNRMC, GNGNS, GNGSA, GPGSV and GLGSV
+      with tracked satelites and constellations 
+
+ 5/9/2012	Modified by Kevin Walton (kevin@unseen.org)
+			Applied Terry Baume's PUBX updates to v12
+			Updates are marked //Kevin
+			Terrys sats() is replaced by v12's native satellites()
+
+9/8/2010	Modified by Terry Baume (terry@bogaurd.net)
+			Support for Ublox NMEA extension PUBX 00
+			Method to retrieve number of sats tracked
+			Adjusted invalid lock defaults             
+
 This library is free software; you can redistribute it and/or
 modify it under the terms of the GNU Lesser General Public
 License as published by the Free Software Foundation; either
@@ -79,6 +96,9 @@ public:
   // horizontal dilution of precision in 100ths
   inline unsigned long hdop() { return _hdop; }
 
+  inline char* constellations() { return _constellations; }
+  inline uint32_t* trackedSatellites() { return tracked_sat_rec; }
+
   void f_get_position(float *latitude, float *longitude, unsigned long *fix_age = 0);
   void crack_datetime(int *year, byte *month, byte *day, 
     byte *hour, byte *minute, byte *second, byte *hundredths = 0, unsigned long *fix_age = 0);
@@ -100,8 +120,9 @@ public:
 #endif
 
 private:
-  enum {_GPS_SENTENCE_GPGGA, _GPS_SENTENCE_GPRMC, _GPS_SENTENCE_OTHER};
-
+  enum {_GPS_SENTENCE_GPGGA, _GPS_SENTENCE_GPRMC, _GPS_SENTENCE_GNGNS, _GPS_SENTENCE_GNGSA,
+      _GPS_SENTENCE_GPGSV, _GPS_SENTENCE_GLGSV,  _GPS_SENTENCE_PUBX, _GPS_SENTENCE_OTHER};  //Dan
+      
   // properties
   unsigned long _time, _new_time;
   unsigned long _date, _new_date;
@@ -121,9 +142,26 @@ private:
   bool _is_checksum_term;
   char _term[15];
   byte _sentence_type;
+  unsigned int _UBX_message_type;
   byte _term_number;
   byte _term_offset;
   bool _gps_data_good;
+
+ struct TrackedSattelites {
+      uint8_t prn;      //"pseudo-random noise" sequences, or Gold codes. GPS sats are listed here http://en.wikipedia.org/wiki/List_of_GPS_satellites
+      uint8_t strength; //in dB
+  };
+
+  char _constellations[6];
+  uint8_t _sat_used_count;
+
+  //format:
+  //bit 0-7: sat ID
+  //bit 8-14: snr (dB), max 99dB
+  //bit 15: used in solution (when tracking)
+  uint32_t tracked_sat_rec[24]; //TODO: externalize array size
+  int _tracked_satellites_index;
+  uint8_t _sat_index;
 
 #ifndef _GPS_NO_STATS
   // statistics

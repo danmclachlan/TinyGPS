@@ -6,6 +6,25 @@ Precision improvements suggested by Wayne Holder.
 Copyright (C) 2008-2013 Mikal Hart
 All rights reserved.
 
+10/20/2023  Modifed by Dan McLachlan (drmclach@live.com)
+      Applied Kevin Walton's PUBX updates to v13 and improved support for 
+      PUBX,00 and PUBX,04 messages.
+      Also pulled in changes from the Teensy distribution adding
+      GPGSA, GNRMC, GNGNS, GNGSA, GPGSV and GLGSV
+      with tracked satelites and constellations 
+
+5/9/2012	Modified by Kevin Walton (kevin@unseen.org)
+			Applied Terry Baume's PUBX updates to v12
+			Updates are marked //Kevin
+			Terrys sats() is replaced by v12's native satellites()
+			ToDo - Add Vertical velocity parsing
+			Warning, only testing so far is using the example test harness "static_test.pde"
+
+9/8/2010	Modified by Terry Baume (terry@bogaurd.net)
+			Support for Ublox NMEA extension PUBX 00
+			Method to retrieve number of sats tracked
+			Adjusted invalid lock defaults
+
 This library is free software; you can redistribute it and/or
 modify it under the terms of the GNU Lesser General Public
 License as published by the Free Software Foundation; either
@@ -25,6 +44,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #define _GPRMC_TERM   "GPRMC"
 #define _GPGGA_TERM   "GPGGA"
+#define _GPGSA_TERM   "GPGSA"
+#define _GNRMC_TERM   "GNRMC"
+#define _GNGNS_TERM   "GNGNS"
+#define _GNGSA_TERM   "GNGSA"
+#define _GPGSV_TERM   "GPGSV"
+#define _GLGSV_TERM   "GLGSV"
+#define _PUBX_TERM    "PUBX"
 
 TinyGPS::TinyGPS()
   :  _time(GPS_INVALID_TIME)
@@ -41,6 +67,7 @@ TinyGPS::TinyGPS()
   ,  _parity(0)
   ,  _is_checksum_term(false)
   ,  _sentence_type(_GPS_SENTENCE_OTHER)
+  ,  _UBX_message_type(0)
   ,  _term_number(0)
   ,  _term_offset(0)
   ,  _gps_data_good(false)
@@ -160,6 +187,7 @@ unsigned long TinyGPS::parse_degrees()
 }
 
 #define COMBINE(sentence_type, term_number) (((unsigned)(sentence_type) << 5) | term_number)
+#define UBX_MESSAGE(message_type) (((unsigned)(_GPS_SENTENCE_PUBX) << 5) | message_type)
 
 // Processes a just-completed term
 // Returns true if new sentence has just passed checksum test and is validated
@@ -170,6 +198,14 @@ bool TinyGPS::term_complete()
     byte checksum = 16 * from_hex(_term[0]) + from_hex(_term[1]);
     if (checksum == _parity)
     {
+     //set the time and date even if not tracking 
+     if(_sentence_type == _GPS_SENTENCE_GPRMC || 
+        ((_sentence_type == _GPS_SENTENCE_PUBX) && (_UBX_message_type == 4)))   // UBX,04 Time of Day and Clock Information
+      {  
+          _time      = _new_time;
+          _date      = _new_date;
+          _last_time_fix = _new_time_fix;
+      }
       if (_gps_data_good)
       {
 #ifndef _GPS_NO_STATS
@@ -196,6 +232,20 @@ bool TinyGPS::term_complete()
           _numsats   = _new_numsats;
           _hdop      = _new_hdop;
           break;
+        case _GPS_SENTENCE_PUBX:
+          switch (_UBX_message_type) {
+          case 0:                         // UBX,00 Lat/Long Position Data
+            _time      = _new_time;
+            _latitude  = _new_latitude;
+            _longitude = _new_longitude;
+            _speed     = _new_speed;
+            _course    = _new_course;
+	          _altitude  = _new_altitude;
+	          _numsats   = _new_numsats;
+            _hdop      = _new_hdop;
+            break;
+          }
+          break;
         }
 
         return true;
@@ -212,20 +262,50 @@ bool TinyGPS::term_complete()
   // the first term determines the sentence type
   if (_term_number == 0)
   {
-    if (!gpsstrcmp(_term, _GPRMC_TERM))
+    if (!gpsstrcmp(_term, _GPRMC_TERM) || !gpsstrcmp(_term, _GNRMC_TERM))
       _sentence_type = _GPS_SENTENCE_GPRMC;
     else if (!gpsstrcmp(_term, _GPGGA_TERM))
       _sentence_type = _GPS_SENTENCE_GPGGA;
+    else if (!gpsstrcmp(_term, _GNGNS_TERM))
+      _sentence_type = _GPS_SENTENCE_GNGNS;
+    else if (!gpsstrcmp(_term, _GNGSA_TERM) || !gpsstrcmp(_term, _GPGSA_TERM))
+      _sentence_type = _GPS_SENTENCE_GNGSA;
+    else if (!gpsstrcmp(_term, _GPGSV_TERM))
+      _sentence_type = _GPS_SENTENCE_GPGSV;
+    else if (!gpsstrcmp(_term, _GLGSV_TERM))
+      _sentence_type = _GPS_SENTENCE_GLGSV;
+    else if (!gpsstrcmp(_term, _PUBX_TERM))
+      _sentence_type = _GPS_SENTENCE_PUBX;
     else
       _sentence_type = _GPS_SENTENCE_OTHER;
     return false;
   }
 
-  if (_sentence_type != _GPS_SENTENCE_OTHER && _term[0])
-    switch(COMBINE(_sentence_type, _term_number))
+  // PUBX messages, use 1st term to determine the message content 
+  // save the message number
+  if (_sentence_type == _GPS_SENTENCE_PUBX && _term_number == 1)
   {
-    case COMBINE(_GPS_SENTENCE_GPRMC, 1): // Time in both sentences
+    _UBX_message_type = gpsatol(_term);
+#ifdef DEBUG    
+    Serial.print("_GPS_SENTENCE_PUBX "); Serial.println(_UBX_message_type);
+#endif
+    return false;
+  }
+
+  // Dan - Added encoding of the sub message in the PUBX type
+  if (_sentence_type != _GPS_SENTENCE_OTHER && _term[0])
+  {
+    unsigned int sentence_type = _sentence_type;
+    if (_sentence_type == _GPS_SENTENCE_PUBX) {
+      sentence_type = UBX_MESSAGE(_UBX_message_type);
+    }
+    switch(COMBINE(sentence_type, _term_number))
+    {
+    case COMBINE(_GPS_SENTENCE_GPRMC, 1): // Time in these sentences
     case COMBINE(_GPS_SENTENCE_GPGGA, 1):
+    case COMBINE(_GPS_SENTENCE_GNGNS, 1):
+    case COMBINE(UBX_MESSAGE(0), 2):      // UBX,00 Lat/Long Position Data
+    case COMBINE(UBX_MESSAGE(4), 2):      // UBX,04 Time of Day and Clock Information
       _new_time = parse_decimal();
       _new_time_fix = millis();
       break;
@@ -234,46 +314,131 @@ bool TinyGPS::term_complete()
       break;
     case COMBINE(_GPS_SENTENCE_GPRMC, 3): // Latitude
     case COMBINE(_GPS_SENTENCE_GPGGA, 2):
+    case COMBINE(_GPS_SENTENCE_GNGNS, 2):
+    case COMBINE(UBX_MESSAGE(0), 3):      // UBX,00 Lat/Long Position Data
       _new_latitude = parse_degrees();
       _new_position_fix = millis();
       break;
     case COMBINE(_GPS_SENTENCE_GPRMC, 4): // N/S
     case COMBINE(_GPS_SENTENCE_GPGGA, 3):
+    case COMBINE(_GPS_SENTENCE_GNGNS, 3):
+    case COMBINE(UBX_MESSAGE(0), 4):      // UBX,00 Lat/Long Position Data
       if (_term[0] == 'S')
         _new_latitude = -_new_latitude;
       break;
     case COMBINE(_GPS_SENTENCE_GPRMC, 5): // Longitude
     case COMBINE(_GPS_SENTENCE_GPGGA, 4):
+    case COMBINE(_GPS_SENTENCE_GNGNS, 4):
+    case COMBINE(UBX_MESSAGE(0), 5):      // UBX,00 Lat/Long Position Data
       _new_longitude = parse_degrees();
       break;
     case COMBINE(_GPS_SENTENCE_GPRMC, 6): // E/W
     case COMBINE(_GPS_SENTENCE_GPGGA, 5):
+    case COMBINE(_GPS_SENTENCE_GNGNS, 5):
+     case COMBINE(UBX_MESSAGE(0), 6):      // UBX,00 Lat/Long Position Data
       if (_term[0] == 'W')
         _new_longitude = -_new_longitude;
       break;
+    case COMBINE(_GPS_SENTENCE_GNGNS, 6):
+      strncpy(_constellations, _term, 5);
+      _constellations[5] = 0;
+      break;
     case COMBINE(_GPS_SENTENCE_GPRMC, 7): // Speed (GPRMC)
+    case COMBINE(UBX_MESSAGE(0), 11):     // UBX,00 Lat/Long Position Data
       _new_speed = parse_decimal();
       break;
     case COMBINE(_GPS_SENTENCE_GPRMC, 8): // Course (GPRMC)
+    case COMBINE(UBX_MESSAGE(0), 12):     // UBX,00 Lat/Long Position Data
       _new_course = parse_decimal();
       break;
-    case COMBINE(_GPS_SENTENCE_GPRMC, 9): // Date (GPRMC)
-      _new_date = gpsatol(_term);
-      break;
+   case COMBINE(_GPS_SENTENCE_GPRMC, 9): // Date (GPRMC)
+    case COMBINE(UBX_MESSAGE(4), 3):     // UBX,04 Time of Day and Clock Information
+       _new_date = gpsatol(_term);
+      break;   
     case COMBINE(_GPS_SENTENCE_GPGGA, 6): // Fix data (GPGGA)
       _gps_data_good = _term[0] > '0';
       break;
-    case COMBINE(_GPS_SENTENCE_GPGGA, 7): // Satellites used (GPGGA)
+    case COMBINE(_GPS_SENTENCE_GPGGA, 7): // Satellites used (GPGGA): GPS only
+    case COMBINE(_GPS_SENTENCE_GNGNS, 7): // GNGNS counts-in all constellations
+    case COMBINE(UBX_MESSAGE(0), 18):     // UBX,00 Lat/Long Position Data
       _new_numsats = (unsigned char)atoi(_term);
       break;
     case COMBINE(_GPS_SENTENCE_GPGGA, 8): // HDOP
+    case COMBINE(UBX_MESSAGE(0), 15):     // UBX,00 Lat/Long Position Data
       _new_hdop = parse_decimal();
       break;
     case COMBINE(_GPS_SENTENCE_GPGGA, 9): // Altitude (GPGGA)
+    case COMBINE(UBX_MESSAGE(0), 7):      // UBX,00 Lat/Long Position Data
       _new_altitude = parse_decimal();
       break;
+    case COMBINE(UBX_MESSAGE(0), 8):      // UBX,00 Lat/Long Position Data
+      // Checking Navigation Status - ok if G2, G3, D2, D3 not ok on NF, DR, RK, or TT
+#ifdef DEBUG
+      Serial.print("NavStat: "); Serial.print(_term[0]); Serial.println(_term[1]);
+#endif
+      _gps_data_good = (_term[0] == 'G' || (_term[0] == 'D' && _term[1] != 'R'));
+      break;
+    case COMBINE(_GPS_SENTENCE_GNGSA, 3): //satellites used in solution: 3 to 15
+      //_sats_used[
+      break;
+    case COMBINE(_GPS_SENTENCE_GPGSV, 2):   //beginning of sequence
+    case COMBINE(_GPS_SENTENCE_GLGSV, 2):   //beginning of sequence
+    {
+      uint8_t msgId = atoi(_term)-1;  //start from 0
+      if(msgId == 0) {
+        //http://geostar-navigation.com/file/geos3/geos_nmea_protocol_v3_0_eng.pdf
+        if(_sentence_type == _GPS_SENTENCE_GPGSV) {
+          //reset GPS & WAAS trackedSatellites
+          for(uint8_t x=0;x<12;x++)
+          {
+            tracked_sat_rec[x] = 0;
+          }
+        } else {
+          //reset GLONASS trackedSatellites: range starts with 23
+          for(uint8_t x=12;x<24;x++)
+          {
+            tracked_sat_rec[x] = 0;
+          }
+        }
+      }
+      _sat_index = msgId*4;   //4 sattelites/line
+      if(_sentence_type == _GPS_SENTENCE_GLGSV)
+      {
+        _sat_index = msgId*4 + 12;   //Glonass offset by 12
+      }
+      break;
+    }
+    case COMBINE(_GPS_SENTENCE_GPGSV, 4):   //satellite #
+    case COMBINE(_GPS_SENTENCE_GPGSV, 8):
+    case COMBINE(_GPS_SENTENCE_GPGSV, 12):
+    case COMBINE(_GPS_SENTENCE_GPGSV, 16):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 4):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 8):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 12):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 16):
+      _tracked_satellites_index = atoi(_term);
+      break;
+    case COMBINE(_GPS_SENTENCE_GPGSV, 7):   //strength
+    case COMBINE(_GPS_SENTENCE_GPGSV, 11):
+    case COMBINE(_GPS_SENTENCE_GPGSV, 15):
+    case COMBINE(_GPS_SENTENCE_GPGSV, 19):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 7):   //strength
+    case COMBINE(_GPS_SENTENCE_GLGSV, 11):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 15):
+    case COMBINE(_GPS_SENTENCE_GLGSV, 19):
+      uint8_t stren = (uint8_t)atoi(_term);
+      if(stren == 0)  //remove the record, 0dB strength
+      {
+        tracked_sat_rec[_sat_index + (_term_number-7)/4] = 0;
+      }
+      else
+      {
+        tracked_sat_rec[_sat_index + (_term_number-7)/4] = _tracked_satellites_index<<8 | stren<<1;
+      }
+      break;
+    } 
   }
-
+ 
   return false;
 }
 
