@@ -50,6 +50,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define _GNGSA_TERM   "GNGSA"
 #define _GPGSV_TERM   "GPGSV"
 #define _GLGSV_TERM   "GLGSV"
+#define _GPZDA_TERM   "GPZDA"
 #define _PUBX_TERM    "PUBX"
 
 TinyGPS::TinyGPS()
@@ -64,6 +65,10 @@ TinyGPS::TinyGPS()
   ,  _numsats(GPS_INVALID_SATELLITES)
   ,  _last_time_fix(GPS_INVALID_FIX_TIME)
   ,  _last_position_fix(GPS_INVALID_FIX_TIME)
+  ,  _year(GPS_INVALID_DATE)
+  ,  _month(GPS_INVALID_DATE)
+  ,  _day(GPS_INVALID_DATE)
+  ,  _last_date_fix(GPS_INVALID_FIX_TIME)
   ,  _parity(0)
   ,  _is_checksum_term(false)
   ,  _sentence_type(_GPS_SENTENCE_OTHER)
@@ -198,6 +203,23 @@ bool TinyGPS::term_complete()
     byte checksum = 16 * from_hex(_term[0]) + from_hex(_term[1]);
     if (checksum == _parity)
     {
+      /*
+// DEBUG TEMP ADDITION
+      Serial.printf("TinyGPS: sentence: ");
+      switch(_sentence_type) 
+      {
+        case _GPS_SENTENCE_GPGGA:   Serial.printf("*%s ", _GPGGA_TERM);    break;
+        case _GPS_SENTENCE_GPRMC:   Serial.printf("*%s ", _GPRMC_TERM);    break;
+        case _GPS_SENTENCE_GNGNS:   Serial.printf("%s ", _GNGNS_TERM);    break;
+        case _GPS_SENTENCE_GNGSA:   Serial.printf("%s ", _GNGSA_TERM);    break;
+        case _GPS_SENTENCE_GPGSV:   Serial.printf("%s ", _GPGSV_TERM);    break;
+        case _GPS_SENTENCE_GLGSV:   Serial.printf("%s ", _GLGSV_TERM);    break;
+        case _GPS_SENTENCE_PUBX:    Serial.printf("%s%02d ", _PUBX_TERM, _UBX_message_type);    break;
+        case _GPS_SENTENCE_OTHER:   Serial.printf("OTHER ");    break;
+      }
+      Serial.printf(" %s", _gps_data_good ? "Fix" : "No Fix - ");
+// END DEBUG TEMP ADDITION
+*/
      //set the time and date even if not tracking 
      if(_sentence_type == _GPS_SENTENCE_GPRMC || 
         ((_sentence_type == _GPS_SENTENCE_PUBX) && (_UBX_message_type == 4)))   // UBX,04 Time of Day and Clock Information
@@ -205,7 +227,22 @@ bool TinyGPS::term_complete()
           _time      = _new_time;
           _date      = _new_date;
           _last_time_fix = _new_time_fix;
+// temp debug
+//Serial.printf(" setting time (%ld)/date (%ld)", _new_time, _new_date);
       }
+// Temp Debug
+//Serial.println();
+
+      if (_sentence_type == _GPS_SENTENCE_GPZDA) // Date and Time information with full year info
+      {
+        _time = _new_time;
+        _last_time_fix = _new_time_fix;
+        _day = _new_day;
+        _month = _new_month;
+        _year = _new_year;
+        _last_date_fix = _new_date_fix;
+      }
+
       if (_gps_data_good)
       {
 #ifndef _GPS_NO_STATS
@@ -274,6 +311,8 @@ bool TinyGPS::term_complete()
       _sentence_type = _GPS_SENTENCE_GPGSV;
     else if (!gpsstrcmp(_term, _GLGSV_TERM))
       _sentence_type = _GPS_SENTENCE_GLGSV;
+    else if (!gpsstrcmp(_term, _GPZDA_TERM))
+      _sentence_type = _GPS_SENTENCE_GPZDA;
     else if (!gpsstrcmp(_term, _PUBX_TERM))
       _sentence_type = _GPS_SENTENCE_PUBX;
     else
@@ -304,8 +343,10 @@ bool TinyGPS::term_complete()
     case COMBINE(_GPS_SENTENCE_GPRMC, 1): // Time in these sentences
     case COMBINE(_GPS_SENTENCE_GPGGA, 1):
     case COMBINE(_GPS_SENTENCE_GNGNS, 1):
+    case COMBINE(_GPS_SENTENCE_GPZDA, 1):
     case COMBINE(UBX_MESSAGE(0), 2):      // UBX,00 Lat/Long Position Data
     case COMBINE(UBX_MESSAGE(4), 2):      // UBX,04 Time of Day and Clock Information
+//Serial.printf("GPS: capturing time from sentence (%d) term (%d)\n", sentence_type, _term_number);
       _new_time = parse_decimal();
       _new_time_fix = millis();
       break;
@@ -351,10 +392,23 @@ bool TinyGPS::term_complete()
     case COMBINE(UBX_MESSAGE(0), 12):     // UBX,00 Lat/Long Position Data
       _new_course = parse_decimal();
       break;
-   case COMBINE(_GPS_SENTENCE_GPRMC, 9): // Date (GPRMC)
+    case COMBINE(_GPS_SENTENCE_GPRMC, 9): // Date (GPRMC)
     case COMBINE(UBX_MESSAGE(4), 3):     // UBX,04 Time of Day and Clock Information
+//Serial.printf("GPS: capturing date from sentence (%d) term (%d)\n", sentence_type, _term_number);
        _new_date = gpsatol(_term);
-      break;   
+      break;
+    case COMBINE(_GPS_SENTENCE_GPZDA, 2): // Day
+      _new_day = gpsatol(_term);
+      _new_date_fix = millis();
+      break; 
+    case COMBINE(_GPS_SENTENCE_GPZDA, 3): // Month
+      _new_month = gpsatol(_term);
+      _new_date_fix = millis();
+      break; 
+    case COMBINE(_GPS_SENTENCE_GPZDA, 4): // year
+      _new_year = gpsatol(_term);
+      _new_date_fix = millis();
+      break; 
     case COMBINE(_GPS_SENTENCE_GPGGA, 6): // Fix data (GPGGA)
       _gps_data_good = _term[0] > '0';
       break;
@@ -530,6 +584,21 @@ void TinyGPS::get_datetime(unsigned long *date, unsigned long *time, unsigned lo
    GPS_INVALID_AGE : millis() - _last_time_fix;
 }
 
+void TinyGPS::get_datetime(int *year, byte *month, byte *day, 
+    byte *hour, byte *minute, byte *second, byte *hundredths = 0, unsigned long *age)
+{
+  if (year) *year = _year;
+  if (month) *month = _month;
+  if (day) *day = _day;
+
+  if (hour) *hour = _time / 1000000;
+  if (minute) *minute = (_time / 10000) % 100;
+  if (second) *second = (_time / 100) % 100;
+  if (hundredths) *hundredths = _time % 100;
+  if (age) *age = _last_date_fix == GPS_INVALID_FIX_TIME ? 
+   GPS_INVALID_AGE : millis() - _last_date_fix;
+
+}
 void TinyGPS::f_get_position(float *latitude, float *longitude, unsigned long *fix_age)
 {
   long lat, lon;

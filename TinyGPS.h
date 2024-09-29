@@ -81,6 +81,9 @@ public:
   // date as ddmmyy, time as hhmmsscc, and age in milliseconds
   void get_datetime(unsigned long *date, unsigned long *time, unsigned long *age = 0);
 
+  void get_datetime(int *year, byte *month, byte *day, 
+    byte *hour, byte *minute, byte *second, byte *hundredths = 0, unsigned long *age = 0);
+
   // signed altitude in centimeters (from GPGGA sentence)
   inline long altitude() { return _altitude; }
 
@@ -121,7 +124,7 @@ public:
 
 private:
   enum {_GPS_SENTENCE_GPGGA, _GPS_SENTENCE_GPRMC, _GPS_SENTENCE_GNGNS, _GPS_SENTENCE_GNGSA,
-      _GPS_SENTENCE_GPGSV, _GPS_SENTENCE_GLGSV,  _GPS_SENTENCE_PUBX, _GPS_SENTENCE_OTHER};  //Dan
+      _GPS_SENTENCE_GPGSV, _GPS_SENTENCE_GLGSV,  _GPS_SENTENCE_GPZDA, _GPS_SENTENCE_PUBX, _GPS_SENTENCE_OTHER};  //Dan
       
   // properties
   unsigned long _time, _new_time;
@@ -136,6 +139,9 @@ private:
 
   unsigned long _last_time_fix, _new_time_fix;
   unsigned long _last_position_fix, _new_position_fix;
+
+  unsigned long _year, _month, _day, _new_year, _new_month, _new_day;
+  unsigned long _last_date_fix, _new_date_fix;
 
   // parsing state variables
   byte _parity;
