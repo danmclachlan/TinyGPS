@@ -585,7 +585,7 @@ void TinyGPS::get_datetime(unsigned long *date, unsigned long *time, unsigned lo
 }
 
 void TinyGPS::get_datetime(int *year, byte *month, byte *day, 
-    byte *hour, byte *minute, byte *second, byte *hundredths = 0, unsigned long *age)
+    byte *hour, byte *minute, byte *second, byte *hundredths, unsigned long *age)
 {
   if (year) *year = _year;
   if (month) *month = _month;
